@@ -19,44 +19,27 @@ import tensorflow as tf
 import sys
 import dataset_util
 
+import re
+
 from PIL import Image
 from collections import namedtuple, OrderedDict
 
 flags = tf.app.flags
 flags.DEFINE_string('csv_input', '', 'Path to the CSV input')
 flags.DEFINE_string('output_path', '', 'Path to output TFRecord')
-flags.DEFINE_string('label1', '', 'Name of class label 1')
-flags.DEFINE_string('label2', '', 'Name of class label 2')
-flags.DEFINE_string('label3', '', 'Name of class label 3')
-flags.DEFINE_string('label4', '', 'Name of class label 4')
-flags.DEFINE_string('label5', '', 'Name of class label 5')
-flags.DEFINE_string('label6', '', 'Name of class label 6')
-# if your image has more labels input them as
-# flags.DEFINE_string('label0', '', 'Name of class[0] label')
-# flags.DEFINE_string('label1', '', 'Name of class[1] label')
-# and so on.
+flags.DEFINE_string('label_map_path', '', 'Path to label_map.pbtxt')
 flags.DEFINE_string('img_path', '', 'Path to images')
 FLAGS = flags.FLAGS
 
+def parse_label_map(path_to_label_map):
+    regexp = r"item\s+{\s+id:\s+(\d+)\s+name:\s+'([\w, \s]+)'\s+}"
 
-# TO-DO replace this with label map
-# for multiple labels add more else if statements
-def class_text_to_int(row_label):
-    if row_label == FLAGS.label1: 
-        return 1
-    elif row_label == FLAGS.label2: 
-        return 2
-    elif row_label == FLAGS.label3: 
-        return 3
-    elif row_label == FLAGS.label4: 
-        return 4
-    elif row_label == FLAGS.label5: 
-        return 5
-    elif row_label == FLAGS.label6: 
-        return 6 
-    else:
-        None
-
+    with open(path_to_label_map, "r") as file:
+        content = file.read()
+        m = re.findall(regexp, content)
+        result = {name:int(id) for id, name in m}
+        print("parsed label_map.pbtxt:", result)        
+        return result 
 
 def split(df, group):
     data = namedtuple('data', ['filename', 'object'])
@@ -64,7 +47,7 @@ def split(df, group):
     return [data(filename, gb.get_group(x)) for filename, x in zip(gb.groups.keys(), gb.groups)]
 
 
-def create_tf_example(group, path):
+def create_tf_example(group, path, label_to_id_map):
     with tf.gfile.GFile(os.path.join(path, '{}'.format(group.filename)), 'rb') as fid:
         encoded_jpg = fid.read()
     encoded_jpg_io = io.BytesIO(encoded_jpg)
@@ -82,12 +65,13 @@ def create_tf_example(group, path):
     classes = []
 
     for index, row in group.object.iterrows():
+        label = str(row['class'])
         xmins.append(row['xmin'] / width)
         xmaxs.append(row['xmax'] / width)
         ymins.append(row['ymin'] / height)
         ymaxs.append(row['ymax'] / height)
-        classes_text.append(str(row['class']).encode('utf8'))
-        classes.append(class_text_to_int(str(row['class'])))
+        classes_text.append(label.encode('utf8'))
+        classes.append(label_to_id_map[label])
 
     tf_example = tf.train.Example(features=tf.train.Features(feature={
         'image/height': dataset_util.int64_feature(height),
@@ -111,8 +95,11 @@ def main(_):
     path = os.path.join(os.getcwd(), FLAGS.img_path)
     examples = pd.read_csv(FLAGS.csv_input)
     grouped = split(examples, 'filename')
+
+    label_to_id_map = parse_label_map(FLAGS.label_map_path)
+
     for group in grouped:
-        tf_example = create_tf_example(group, path)
+        tf_example = create_tf_example(group, path, label_to_id_map)
         writer.write(tf_example.SerializeToString())
 
     writer.close()
